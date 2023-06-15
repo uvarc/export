@@ -20,8 +20,6 @@ COPY lokilogs.py $BASEDIR
 COPY collector.py $BASEDIR
 COPY async_api.py $BASEDIR
 
-EXPOSE 8001
-
 WORKDIR $BASEDIR
 
 USER $USER
