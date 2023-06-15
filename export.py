@@ -8,6 +8,7 @@
 # You can download pre-built docker container from docker hub - "wekasolutions/export"
 
 import argparse
+
 # system imports
 import logging.handlers
 import os
@@ -22,24 +23,27 @@ import socket
 import prometheus_client
 
 # local imports
-#from maps import Map, MapRegistry
+# from maps import Map, MapRegistry
 from maps import MapRegistry
 import wekalib.signals as signals
 from collector import WekaCollector
 from lokilogs import LokiServer
 from wekalib.wekacluster import WekaCluster
 import wekalib.exceptions
+import os
+import tempfile
+import json 
 
 VERSION = "1.6.7"
 
-#VERSION = "experimental"
+# VERSION = "experimental"
 
 # set the root log
 log = logging.getLogger()
 
 
 # load the config file
-#@staticmethod
+# @staticmethod
 def _load_config(inputfile):
     try:
         f = open(inputfile)
@@ -54,60 +58,90 @@ def _load_config(inputfile):
             log.error(f"Error reading config file: {exc}")
             raise
 
-def prom_client(config):
 
+def prom_client(config):
     error = False
-    for host in config['cluster']['hosts']:
+    for host in config["cluster"]["hosts"]:
         try:
             socket.gethostbyname(host)
         except socket.gaierror:
-            log.critical(f"Hostname {host} not resolvable - is it in /etc/hosts or DNS?")
+            log.critical(
+                f"Hostname {host} not resolvable - is it in /etc/hosts or DNS?"
+            )
             error = True
         except Exception as exc:
             log.critical(exc)
             error = True
 
     if error:
-        log.critical("Errors resolving hostnames given.  Please ensure they are in /etc/hosts or DNS and are resolvable")
+        log.critical(
+            "Errors resolving hostnames given.  Please ensure they are in /etc/hosts or DNS and are resolvable"
+        )
         sys.exit(1)
-    elif 'cluster' not in config:
-        log.error(f"'cluster:' stanza missing from .yml file - version mismatch between .yml and exporter version?")
+    elif "cluster" not in config:
+        log.error(
+            f"'cluster:' stanza missing from .yml file - version mismatch between .yml and exporter version?"
+        )
         sys.exit(1)
-    elif 'exporter' not in config:
-        log.error(f"'exporter:' stanza missing from .yml file - version mismatch between .yml and exporter version?")
+    elif "exporter" not in config:
+        log.error(
+            f"'exporter:' stanza missing from .yml file - version mismatch between .yml and exporter version?"
+        )
         sys.exit(1)
 
-    if 'force_https' not in config['cluster']:  # allow defaults for these
-        config['cluster']['force_https'] = False
+    if "force_https" not in config["cluster"]:  # allow defaults for these
+        config["cluster"]["force_https"] = False
 
-    if 'verify_cert' not in config['cluster']:
-        config['cluster']['verify_cert'] = True
+    if "verify_cert" not in config["cluster"]:
+        config["cluster"]["verify_cert"] = True
 
-    if 'timeout' not in config['exporter']:
-        config['exporter']['timeout'] = 10
+    if "timeout" not in config["exporter"]:
+        config["exporter"]["timeout"] = 10
 
-    if 'backends_only' not in config['exporter']:
-        config['exporter']['backends_only'] = False
+    if "backends_only" not in config["exporter"]:
+        config["exporter"]["backends_only"] = False
 
-    if 'datapoints_per_collect' not in config['exporter']:
-        config['exporter']['datapoints_per_collect'] = 1
+    if "datapoints_per_collect" not in config["exporter"]:
+        config["exporter"]["datapoints_per_collect"] = 1
 
     log.info(f"Timeout set to {config['exporter']['timeout']} secs")
 
+    # create the WekaCluster object
+    access_token = os.environ.get("access_token")
+    refresh_token = os.environ.get("refresh_token")
+    token_type = os.environ.get("token_type")
+
+    # Create a temporary file and write the token data to it
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as token_file:
+        token_data = {
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'token_type': token_type
+        }
+        token_file.write(json.dumps(token_data))
+        token_file_path = token_file.name
+
     try:
-        cluster_obj = WekaCluster(config['cluster']['hosts'], config['cluster']['auth_token_file'], 
-                                  force_https=config['cluster']['force_https'], 
-                                  verify_cert=config['cluster']['verify_cert'], 
-                                  backends_only=config['exporter']['backends_only'],
-                                  timeout=config['exporter']['timeout'])
+        cluster_obj = WekaCluster(
+            config["cluster"]["hosts"],
+            token_file_path,
+            force_https=config["cluster"]["force_https"],
+            verify_cert=config["cluster"]["verify_cert"],
+            backends_only=config["exporter"]["backends_only"],
+            timeout=config["exporter"]["timeout"],
+        )
     except wekalib.exceptions.HTTPError as exc:
         if exc.code == 403:
-            log.critical(f"Cluster returned permission error - is the userid level ReadOnly or above?")
+            log.critical(
+                f"Cluster returned permission error - is the userid level ReadOnly or above?"
+            )
             return
         log.critical(f"Cluster returned HTTP error {exc}; aborting")
         return
     except wekalib.exceptions.SSLError as exc:
-        log.critical(f"SSL Error: Only weka v3.10 and above support https, and force_https is set in config file.")
+        log.critical(
+            f"SSL Error: Only weka v3.10 and above support https, and force_https is set in config file."
+        )
         log.critical(f"SSL Error: Is this cluster < v3.10? Please verify configuration")
         log.critical(f"Error is {exc}")
         return
@@ -122,9 +156,11 @@ def prom_client(config):
     # create the WekaCollector object
     collector = WekaCollector(config, cluster_obj)
 
-    if config['exporter']['loki_host'] is not None:
+    if config["exporter"]["loki_host"] is not None:
         try:
-            lokiserver = LokiServer(config['exporter']['loki_host'], config['exporter']['loki_port'], maps)
+            lokiserver = LokiServer(
+                config["exporter"]["loki_host"], config["exporter"]["loki_port"], maps
+            )
         except:
             sys.exit(1)
     else:
@@ -135,45 +171,54 @@ def prom_client(config):
     #
     log.info(f"starting http server on port {config['exporter']['listen_port']}")
     try:
-        prometheus_client.start_http_server(int(config['exporter']['listen_port']))
+        prometheus_client.start_http_server(int(config["exporter"]["listen_port"]))
     except Exception as exc:
-        log.critical(f"Unable to start http server on port {config['exporter']['listen_port']}: {exc}")
+        log.critical(
+            f"Unable to start http server on port {config['exporter']['listen_port']}: {exc}"
+        )
         return 1
 
     # register our custom collector
     prometheus_client.REGISTRY.register(collector)
 
     while True:
-        time.sleep(30)  # sleep first, just in case we're started at the same time as Loki; give it time
+        time.sleep(
+            30
+        )  # sleep first, just in case we're started at the same time as Loki; give it time
         if lokiserver is not None:
             collector.collect_logs(lokiserver)
 
 
 def configure_logging(logger, verbosity, disable_syslog=False):
-    loglevel = logging.INFO     # default logging level
+    loglevel = logging.INFO  # default logging level
     libloglevel = logging.ERROR
 
     # default message formats
     console_format = "%(message)s"
-    syslog_format =  "%(levelname)s:%(message)s"
+    syslog_format = "%(levelname)s:%(message)s"
 
-    syslog_format =  "%(process)s:%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
+    syslog_format = (
+        "%(process)s:%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
+    )
 
     if verbosity == 1:
         loglevel = logging.INFO
         console_format = "%(levelname)s:%(message)s"
-        syslog_format =  "%(process)s:%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
+        syslog_format = "%(process)s:%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
         libloglevel = logging.INFO
     elif verbosity == 2:
         loglevel = logging.DEBUG
-        console_format = "%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
-        syslog_format =  "%(process)s:%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
+        console_format = (
+            "%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
+        )
+        syslog_format = "%(process)s:%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
     elif verbosity > 2:
         loglevel = logging.DEBUG
-        console_format = "%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
-        syslog_format =  "%(process)s:%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
+        console_format = (
+            "%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
+        )
+        syslog_format = "%(process)s:%(filename)s:%(lineno)s:%(funcName)s():%(levelname)s:%(message)s"
         libloglevel = logging.DEBUG
-
 
     # create handler to log to console
     console_handler = logging.StreamHandler()
@@ -198,9 +243,13 @@ def configure_logging(logger, verbosity, disable_syslog=False):
     logger.setLevel(loglevel)
 
     logging.getLogger("wekalib").setLevel(logging.ERROR)
-    logging.getLogger("wekalib.wekaapi").setLevel(libloglevel) # should leave at INFO as default
+    logging.getLogger("wekalib.wekaapi").setLevel(
+        libloglevel
+    )  # should leave at INFO as default
     logging.getLogger("wekalib.wekacluster").setLevel(libloglevel)
-    logging.getLogger("wekalib.sthreads").setLevel(logging.ERROR) # should leave at ERROR as default
+    logging.getLogger("wekalib.sthreads").setLevel(
+        logging.ERROR
+    )  # should leave at ERROR as default
     logging.getLogger("urllib3").setLevel(logging.ERROR)
 
     # local modules
@@ -214,11 +263,26 @@ def main():
     signals.signal_handling()
 
     parser = argparse.ArgumentParser(description="Prometheus Client for Weka clusters")
-    parser.add_argument("-c", "--configfile", dest='configfile', default="./export.yml",
-                        help="override ./export.yml as config file")
-    parser.add_argument("--no_syslog", action="store_true", default=False, help="Disable syslog logging")
-    parser.add_argument("-v", "--verbosity", action="count", default=0, help="increase output verbosity")
-    parser.add_argument("--version", dest="version", default=False, action="store_true", help="Display version number")
+    parser.add_argument(
+        "-c",
+        "--configfile",
+        dest="configfile",
+        default="./export.yml",
+        help="override ./export.yml as config file",
+    )
+    parser.add_argument(
+        "--no_syslog", action="store_true", default=False, help="Disable syslog logging"
+    )
+    parser.add_argument(
+        "-v", "--verbosity", action="count", default=0, help="increase output verbosity"
+    )
+    parser.add_argument(
+        "--version",
+        dest="version",
+        default=False,
+        action="store_true",
+        help="Display version number",
+    )
     args = parser.parse_args()
 
     if args.version:
@@ -242,6 +306,5 @@ def main():
     prom_client(config)
 
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
